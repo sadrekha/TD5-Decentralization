@@ -17,21 +17,17 @@ export async function node(
     app.use(express.json());
     app.use(bodyParser.json());
 
-    // Node state
     const state = {
         killed: false,
         x: isFaulty ? null : initialValue,
-        decided: isFaulty ? null : false, // non-faulty nodes start with not decided (false)
+        decided: isFaulty ? null : false,
         k: isFaulty ? null : 0,
     };
 
-    // Flag to indicate if the consensus algorithm is running
     let consensusRunning = false;
 
-    // Message buffer: maps round number to an array of received values
     const messageBuffer: Map<number, (0 | 1)[]> = new Map();
 
-    // /status route: returns 500 "faulty" for faulty nodes, 200 "live" for healthy ones
     app.get("/status", (req, res) => {
         if (isFaulty) {
             res.status(500).send("faulty");
@@ -40,7 +36,6 @@ export async function node(
         }
     });
 
-    // /getState route: returns the current state, or null fields if faulty
     app.get("/getState", (req, res) => {
         if (isFaulty) {
             res.json({
@@ -54,7 +49,6 @@ export async function node(
         }
     });
 
-    // /stop route: stops the consensus algorithm (sets killed flag)
     app.get("/stop", (req, res) => {
         if (!isFaulty) {
             state.killed = true;
@@ -62,7 +56,6 @@ export async function node(
         res.send("stopped");
     });
 
-    // /start route: starts the consensus algorithm (if non-faulty)
     app.get("/start", (req, res) => {
         if (!isFaulty && !consensusRunning && !state.killed) {
             consensusRunning = true;
@@ -71,7 +64,6 @@ export async function node(
         res.send("started");
     });
 
-    // /message route: receives messages from other nodes and stores them by round
     app.post("/message", (req, res) => {
         if (isFaulty || state.killed) {
             return res.sendStatus(200);
@@ -88,18 +80,14 @@ export async function node(
     });
 
 
-    // Consensus algorithm implementation (Ben‐Or variant)
     async function runConsensus(): Promise<void> {
         while (!state.killed && state.decided !== true) {
-            const currentRound = state.k as number; // safe because non-faulty
-            // Ensure a message array exists for the current round
+            const currentRound = state.k as number;
             if (!messageBuffer.has(currentRound)) {
                 messageBuffer.set(currentRound, []);
             }
-            // Include own value in the message buffer for this round
             messageBuffer.get(currentRound)?.push(state.x as 0 | 1);
 
-            // Broadcast current value to all other nodes
             for (let i = 0; i < N; i++) {
                 if (i === nodeId) continue;
                 const url = `http://localhost:${BASE_NODE_PORT + i}/message`;
@@ -108,19 +96,15 @@ export async function node(
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ round: currentRound, value: state.x }),
                 }).catch(() => {
-                    // Ignore fetch errors
                 });
             }
 
-            // Wait for a short time to allow messages to arrive (simulate network delay)
             await delay(100);
 
-            // Process messages for this round
             const messages = messageBuffer.get(currentRound) || [];
             const count0 = messages.filter((v) => v === 0).length;
             const count1 = messages.filter((v) => v === 1).length;
 
-            // The decision threshold is N - F, but we only decide if N > 2F (otherwise consensus is impossible)
             const threshold = N - F;
             if (N > 2 * F && count0 >= threshold && count0 > count1) {
                 state.x = 0;
@@ -129,7 +113,6 @@ export async function node(
                 state.x = 1;
                 state.decided = true;
             } else {
-                // No decision: update current estimate to the majority value, or coin toss in case of a tie
                 if (count0 > count1) {
                     state.x = 0;
                 } else if (count1 > count0) {
@@ -139,12 +122,10 @@ export async function node(
                 }
             }
 
-            // If still undecided, increment round counter and continue
             if (!state.killed && state.decided !== true) {
                 state.k = (state.k as number) + 1;
             }
 
-            // Short delay before next round
             await delay(10);
         }
     }
